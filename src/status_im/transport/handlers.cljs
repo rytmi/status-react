@@ -24,7 +24,8 @@
    (let [{:keys [payload sig]} (js->clj js-message :keywordize-keys true)
          status-message        (-> payload
                                    transport.utils/to-utf8
-                                   transit/deserialize)]
+                                   transit/deserialize
+                                   (assoc :js-obj js-message))]
      (when (and sig status-message)
        (message/receive status-message (or chat-id sig) sig cofx)))))
 
@@ -136,3 +137,10 @@
      (if message
        (handlers-macro/merge-fx cofx fx (message/receive message chat-id signature))
        fx))))
+
+(re-frame/reg-fx
+ :confirm-message-processed
+ (fn [{:keys [web3 js-obj]}]
+   (.. web3
+       -shh
+       (confirmMessagesProcessed #js [js-obj] (fn [_ _])))))

@@ -174,7 +174,7 @@ RCT_EXPORT_METHOD(startNode:(NSString *)configString) {
     if([devCluster isEqualToString:@"1"]){
         dev = 1;
     }
-    char *configChars = GenerateConfig((char *)[networkDir UTF8String], networkId, dev);
+    char *configChars = GenerateConfig((char *)[networkDir UTF8String], networkId);
     NSString *config = [NSString stringWithUTF8String: configChars];
     configData = [config dataUsingEncoding:NSUTF8StringEncoding];
     NSDictionary *resultingConfigJson = [NSJSONSerialization JSONObjectWithData:configData options:NSJSONReadingMutableContainers error:nil];

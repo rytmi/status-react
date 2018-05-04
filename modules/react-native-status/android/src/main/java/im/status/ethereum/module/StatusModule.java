@@ -209,7 +209,7 @@ class StatusModule extends ReactContextBaseJavaModule implements LifecycleEventL
             dev = 1;
         }
 
-        String config = Statusgo.GenerateConfig(testnetDataDir, 3, dev);
+        String config = Statusgo.GenerateConfig(testnetDataDir, 3);
         try {
             JSONObject customConfig = new JSONObject(defaultConfig);
             JSONObject jsonConfig = new JSONObject(config);
