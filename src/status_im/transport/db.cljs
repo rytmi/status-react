@@ -15,7 +15,7 @@
 ;;TODO (yenda) remove once go implements persistence
 (spec/def ::sym-key string?)
 (spec/def ::filters any?)
-(spec/def ::one-to-one boolean?)
+(spec/def ::one-to-one (spec/nilable boolean?))
 
 (spec/def :transport/chat (allowed-keys :req-un [::ack ::seen ::pending-ack ::pending-send ::topic]
                                         :opt-un [::sym-key-id ::sym-key ::filters ::one-to-one]))

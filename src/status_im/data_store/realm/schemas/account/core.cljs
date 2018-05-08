@@ -5,6 +5,6 @@
 
 ;; put schemas ordered by version
 (def schemas [{:schema        v2/schema
-               :schemaVersion 1
+               :schemaVersion 2
                :migration     v2/migration}])
 
