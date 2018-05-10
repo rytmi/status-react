@@ -41,6 +41,9 @@
 (defn shh [web3]
   (.-shh web3))
 
+(defn shhext [web3]
+  (.-shhext web3))
+
 (defn extract-enode-id [enode]
   (-> enode
       (string/split #"/")

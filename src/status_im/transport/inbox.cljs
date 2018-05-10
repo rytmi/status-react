@@ -118,7 +118,7 @@
     (doseq [topic topics]
       (let [opts (assoc opts :topic topic)]
         (log/info "offline inbox: request-messages args" (pr-str opts))
-        (.requestMessages (transport.utils/shh web3)
+        (.requestMessages (transport.utils/shhext web3)
                           (clj->js opts)
                           (fn [err resp]
                             (if-not err
