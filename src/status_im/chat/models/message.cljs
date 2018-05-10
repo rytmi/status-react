@@ -41,44 +41,44 @@
   "Relative datemarks of message groups can get obsolete with passing time,
   this function re-indexes them for given chat"
   [chat-id {:keys [db]}]
-  (let [chat-messages (get-in db [:chat chat-id :messages])]
-    (update-in db
-               [:chats chat-id :message-groups]
-               (partial reduce-kv (fn [acc datemark message-refs]
-                                    (let [new-datemark (->> message-refs
-                                                            first
-                                                            :message-id
-                                                            (get chat-messages)
-                                                            :timestamp
-                                                            time/day-relative)]
-                                      (if (= datemark new-datemark)
-                                        ;; nothing to re-index
-                                        (assoc acc datemark message-refs)
-                                        ;; relative datemark shifted, reindex
-                                        (assoc acc new-datemark message-refs))))
-                        {}))))
+  (let [chat-messages (get-in db [:chats chat-id :messages])]
+    {:db (update-in db
+                    [:chats chat-id :message-groups]
+                    (partial reduce-kv (fn [groups datemark message-refs]
+                                         (let [new-datemark (->> message-refs
+                                                                 first
+                                                                 :message-id
+                                                                 (get chat-messages)
+                                                                 :timestamp
+                                                                 time/day-relative)]
+                                           (if (= datemark new-datemark)
+                                             ;; nothing to re-index
+                                             (assoc groups datemark message-refs)
+                                             ;; relative datemark shifted, reindex
+                                             (assoc groups new-datemark message-refs))))
+                             {}))}))
 
-(defn group-message
-  "Takes new message + cofx and properly group it into the `:message-groups` index in db"
-  [{:keys [chat-id message-id timestamp]} {:keys [db]}]
-  (let [datemark      (time/day-relative timestamp)
-        timestamp-str (time/timestamp->time timestamp)]
-    {:db (update-in db [:chats chat-id :message-groups datemark]
-                    conj
-                    {:message-id    message-id
-                     :timestamp-str timestamp-str})}))
+(defn- sort-references
+  [messages message-references]
+  (sort-by (juxt (comp unchecked-negate :clock-value (partial get messages) :message-id)
+                 :message-id)
+           message-references))
 
-(defn sort-message-group
-  "Takes new message + cofx and re-sorts the message group where new message belongs"
-  [{:keys [chat-id timestamp]} {:keys [db]}]
-  (let [msg-selector (comp (partial get (get-in db [:chat chat-id :messages]))
-                           :message-id)]
-    {:db (update-in db [:chats chat-id :message-groups (time/day-relative timestamp)]
-                    (fn [message-refs]
-                      (->> message-refs
-                           (filter (comp :show? msg-selector))
-                           (sort-by (juxt (comp unchecked-negate msg-selector)
-                                          :message-id)))))}))
+(defn group-messages
+  "Takes chat-id, new messages + cofx and properly groups them into the `:message-groups` index in db"
+  [chat-id messages {:keys [db]}]
+  {:db (reduce (fn [db [datemark grouped-messages]]
+                 (update-in db [:chats chat-id :message-groups datemark]
+                            (fn [message-references]
+                              (->> grouped-messages
+                                   (filter :show?)
+                                   (map (fn [{:keys [message-id timestamp]}]
+                                          {:message-id    message-id
+                                           :timestamp-str (time/timestamp->time timestamp)}))
+                                   (into (or message-references '()))
+                                   (sort-references (get-in db [:chats chat-id :messages]))))))
+               db
+               (group-by (comp time/day-relative :timestamp) messages))})
 
 (defn- add-message
   [{:keys [chat-id message-id clock-value content] :as message} current-chat? {:keys [db] :as cofx}]
@@ -94,8 +94,7 @@
                                  (update-in [:chats chat-id :unviewed-messages] (fnil conj #{}) message-id))
       :data-store/tx [(messages-store/save-message-tx prepared-message)]}
      (re-index-message-groups chat-id)
-     (group-message message)
-     (sort-message-group message))))
+     (group-messages chat-id [message]))))
 
 (defn- prepare-chat [chat-id {:keys [db now] :as cofx}]
   (chat-model/upsert-chat {:chat-id chat-id
@@ -281,9 +280,27 @@
                              (send chat-id message-id send-record)
                              (update-message-status message :sending))))
 
-(defn delete-message [chat-id message-id {:keys [db]}]
-  {:db            (update-in db [:chats chat-id :messages] dissoc message-id)
-   :data-store/tx [(messages-store/delete-message-tx message-id)]})
+(defn- remove-message-from-group [chat-id {:keys [timestamp message-id]} {:keys [db]}]
+  (let [datemark (time/day-relative timestamp)]
+    {:db (update-in db [:chats chat-id :message-groups]
+                    (fn [groups]
+                      (let [message-references (get groups datemark)]
+                        (if (= 1 (count message-references))
+                          ;; message removed is the only one in group, remove whole group
+                          (dissoc groups datemark)
+                          ;; remove message from `message-references` list
+                          (assoc groups datemark
+                                 (remove (comp (partial = message-id) :message-id)
+                                         message-references))))))}))
+
+(defn delete-message
+  "Deletes chat message, along its occurence in all references, like `:message-groups`"
+  [chat-id message-id {:keys [db] :as cofx}]
+  (handlers-macro/merge-fx
+   cofx
+   {:db            (update-in db [:chats chat-id :messages] dissoc message-id)
+    :data-store/tx [(messages-store/delete-message-tx message-id)]}
+   (remove-message-from-group chat-id (get-in db [:chats chat-id :messages message-id]))))
 
 (defn send-message [{:keys [db now random-id] :as cofx} {:keys [chat-id] :as params}]
   (upsert-and-send (prepare-plain-message chat-id params (get-in db [:chats chat-id]) now) cofx))
