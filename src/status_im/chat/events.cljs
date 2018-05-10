@@ -71,11 +71,13 @@
  [(re-frame/inject-cofx :data-store/get-messages)]
  (fn [{{:keys [current-chat-id] :as db} :db get-stored-messages :get-stored-messages} _]
    (when-not (get-in db [:chats current-chat-id :all-loaded?])
-     (let [loaded-count (count (get-in db [:chats current-chat-id :messages]))
-           new-messages (index-messages (get-stored-messages current-chat-id loaded-count))]
+     (let [loaded-count     (count (get-in db [:chats current-chat-id :messages]))
+           new-messages     (get-stored-messages current-chat-id loaded-count)
+           indexed-messages (index-messages new-messages)]
        {:db (-> db
-                (update-in [:chats current-chat-id :messages] merge new-messages)
-                (update-in [:chats current-chat-id :not-loaded-message-ids] #(apply disj % (keys new-messages)))
+                (update-in [:chats current-chat-id :messages] merge indexed-messages)
+                (update-in [:chats current-chat-id :not-loaded-message-ids]
+                           #(apply disj % (keys indexed-messages)))
                 (assoc-in [:chats current-chat-id :all-loaded?]
                           (> constants/default-number-of-messages (count new-messages))))}))))
 

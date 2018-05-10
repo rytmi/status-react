@@ -2,6 +2,7 @@
   (:require [re-frame.core :as re-frame]
             [status-im.constants :as constants]
             [status-im.utils.core :as utils]
+            [status-im.utils.datetime :as time]
             [status-im.chat.events.console :as console-events]
             [status-im.chat.events.requests :as requests-events]
             [status-im.chat.models :as chat-model]
@@ -36,16 +37,65 @@
     (not current-chat?) (assoc :appearing? false)
     (emoji-only-content? content) (assoc :content-type constants/content-type-emoji)))
 
+(defn re-index-message-groups
+  "Relative datemarks of message groups can get obsolete with passing time,
+  this function re-indexes them for given chat"
+  [chat-id {:keys [db]}]
+  (let [chat-messages (get-in db [:chat chat-id :messages])]
+    (update-in db
+               [:chats chat-id :message-groups]
+               (partial reduce-kv (fn [acc datemark message-refs]
+                                    (let [new-datemark (->> message-refs
+                                                            first
+                                                            :message-id
+                                                            (get chat-messages)
+                                                            :timestamp
+                                                            time/day-relative)]
+                                      (if (= datemark new-datemark)
+                                        ;; nothing to re-index
+                                        (assoc acc datemark message-refs)
+                                        ;; relative datemark shifted, reindex
+                                        (assoc acc new-datemark message-refs))))
+                        {}))))
+
+(defn group-message
+  "Takes new message + cofx and properly group it into the `:message-groups` index in db"
+  [{:keys [chat-id message-id timestamp]} {:keys [db]}]
+  (let [datemark      (time/day-relative timestamp)
+        timestamp-str (time/timestamp->time timestamp)]
+    {:db (update-in db [:chats chat-id :message-groups datemark]
+                    conj
+                    {:message-id    message-id
+                     :timestamp-str timestamp-str})}))
+
+(defn sort-message-group
+  "Takes new message + cofx and re-sorts the message group where new message belongs"
+  [{:keys [chat-id timestamp]} {:keys [db]}]
+  (let [msg-selector (comp (partial get (get-in db [:chat chat-id :messages]))
+                           :message-id)]
+    {:db (update-in db [:chats chat-id :message-groups (time/day-relative timestamp)]
+                    (fn [message-refs]
+                      (->> message-refs
+                           (filter (comp :show? msg-selector))
+                           (sort-by (juxt (comp unchecked-negate msg-selector)
+                                          :message-id)))))}))
+
 (defn- add-message
-  [chat-id {:keys [message-id clock-value content] :as message} current-chat? {:keys [db]}]
+  [{:keys [chat-id message-id clock-value content] :as message} current-chat? {:keys [db] :as cofx}]
   (let [prepared-message (prepare-message message chat-id current-chat?)]
-    {:db            (cond->
-                     (-> db
-                         (update-in [:chats chat-id :messages] assoc message-id prepared-message)
-                         (update-in [:chats chat-id :last-clock-value] (partial utils.clocks/receive clock-value))) ; this will increase last-clock-value twice when sending our own messages
-                      (not current-chat?)
-                      (update-in [:chats chat-id :unviewed-messages] (fnil conj #{}) message-id))
-     :data-store/tx [(messages-store/save-message-tx prepared-message)]}))
+    (handlers-macro/merge-fx
+     cofx
+     {:db                      (cond->
+                                (-> db
+                                    (update-in [:chats chat-id :messages] assoc message-id prepared-message)
+                                       ;; this will increase last-clock-value twice when sending our own messages
+                                    (update-in [:chats chat-id :last-clock-value] (partial utils.clocks/receive clock-value)))
+                                 (not current-chat?)
+                                 (update-in [:chats chat-id :unviewed-messages] (fnil conj #{}) message-id))
+      :data-store/tx [(messages-store/save-message-tx prepared-message)]}
+     (re-index-message-groups chat-id)
+     (group-message message)
+     (sort-message-group message))))
 
 (defn- prepare-chat [chat-id {:keys [db now] :as cofx}]
   (chat-model/upsert-chat {:chat-id chat-id
@@ -71,8 +121,7 @@
                                                        request-command)
         new-timestamp                             (or timestamp now)]
     (handlers-macro/merge-fx cofx
-                             (add-message chat-id
-                                          (cond-> (assoc message
+                             (add-message (cond-> (assoc message
                                                          :timestamp        new-timestamp
                                                          :show?            true)
                                             public-key
@@ -208,7 +257,7 @@
     (handlers-macro/merge-fx cofx
                              (chat-model/upsert-chat {:chat-id chat-id
                                                       :timestamp now})
-                             (add-message chat-id message-with-id true)
+                             (add-message message-with-id true)
                              (send chat-id message-id send-record))))
 
 (defn send-push-notification [fcm-token status cofx]
